@@ -10,6 +10,7 @@
 #include "protocol.h"
 #include "validation.h"
 #include "warnings.h"
+#include "spork.h"
 
 // Keep track of the active Masternode
 CActiveMasternodeInfo activeMasternodeInfo;
@@ -107,6 +108,17 @@ void CActiveMasternodeManager::Init()
         return;
     }
 
+	// Check SPORK_10_MULTIPORT_ENABLED and if it's false drop the masternodes that are running on non-default port.
+    if (!sporkManager.IsSporkActive(SPORK_10_MULTIPORT_ENABLED) && ((activeMasternodeInfo.service.GetPort() != Params().GetDefaultPort()) || (dmn->pdmnState->addr.GetPort() != Params().GetDefaultPort()))) {
+		// state = MASTERNODE_REMOVED;
+		activeMasternodeInfo.proTxHash = uint256();
+		activeMasternodeInfo.outpoint.SetNull();
+        state = MASTERNODE_ERROR;
+        strError = "Multiport is forbid by spork. Masternode on non-default port will NOT be active anymore.";
+        LogPrintf("CActiveDeterministicMasternodeManager::Init -- ERROR: %s\n", strError);
+        return;
+    }
+
     if (Params().NetworkIDString() != CBaseChainParams::REGTEST) {
         // Check socket connectivity
         LogPrintf("CActiveDeterministicMasternodeManager::Init -- Checking inbound connection to '%s'\n", activeMasternodeInfo.service.ToString());
@@ -134,6 +146,20 @@ void CActiveMasternodeManager::UpdatedBlockTip(const CBlockIndex* pindexNew, con
     if (!fMasternodeMode) return;
 
     if (!deterministicMNManager->IsDIP3Enforced(pindexNew->nHeight)) return;
+
+	// Check SPORK_10_MULTIPORT_ENABLED and if it's false drop the masternodes that are running on non-default port.
+		CDeterministicMNList mnList = deterministicMNManager->GetListAtChainTip();
+
+		CDeterministicMNCPtr dmn = mnList.GetMNByOperatorKey(*activeMasternodeInfo.blsPubKeyOperator);
+    if (!sporkManager.IsSporkActive(SPORK_10_MULTIPORT_ENABLED) && ((activeMasternodeInfo.service.GetPort() != Params().GetDefaultPort()) || (dmn->pdmnState->addr.GetPort() != Params().GetDefaultPort()))) {
+		activeMasternodeInfo.proTxHash = uint256();
+		activeMasternodeInfo.outpoint.SetNull();
+        state = MASTERNODE_ERROR;
+        strError = "Multiport is forbid by spork. Masternode on non-default port will NOT be active anymore.";
+        LogPrintf("CActiveDeterministicMasternodeManager::Init -- ERROR: %s\n", strError);
+		Init();
+        return;
+    }
 
     if (state == MASTERNODE_READY) {
         auto oldMNList = deterministicMNManager->GetListForBlock(pindexNew->pprev);
@@ -215,5 +241,5 @@ bool CActiveMasternodeManager::IsValidNetAddr(CService addrIn)
     // TODO: regtest is fine with any addresses for now,
     // should probably be a bit smarter if one day we start to implement tests for this
     return Params().NetworkIDString() == CBaseChainParams::REGTEST ||
-           (addrIn.IsIPv4() && IsReachable(addrIn) && addrIn.IsRoutable());
+           ((addrIn.IsIPv4() || (sporkManager.IsSporkActive(SPORK_11_IPv6_ENABLED) && addrIn.IsIPv6())) && IsReachable(addrIn) && addrIn.IsRoutable());
 }
